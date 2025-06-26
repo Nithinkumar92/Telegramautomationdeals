@@ -10,7 +10,7 @@ pip install -r requirements.txt
 ```
 2. Set your secrets in `.env`:
 ```
-TELEGRAM_BOT_TOKEN=7789826926:AAFhwdDpcj_mpBDU11a6UFE6tbRDNXwtF3U
+TELEGRAM_BOT_TOKEN=your telegram bot token
 
 TELEGRAM_CHAT_ID=@prideautomation
 ```
