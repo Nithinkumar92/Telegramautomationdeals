@@ -18,56 +18,122 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9"
 }
 
+PRICE_THRESHOLD = 150000  # Set your global price threshold here
+
 def get_search_results(keyword, max_products=5):
     search_url = f"https://www.amazon.in/s?k={quote_plus(keyword)}"
     response = requests.get(search_url, headers=HEADERS)
     soup = BeautifulSoup(response.text, "html.parser")
 
     product_links = []
-    for tag in soup.select("a.a-link-normal.s-no-outline")[:max_products]:
+    for tag in soup.select("a.a-link-normal.s-no-outline"):
         relative_link = tag.get("href")
         if relative_link:
             full_link = "https://www.amazon.in" + relative_link.split("?")[0]
-            if full_link not in product_links:
+            if '/dp/' in full_link and full_link not in product_links:
                 product_links.append(full_link)
+        if len(product_links) >= max_products:
+            break
     return product_links
 
 def get_amazon_price(url):
     try:
         response = requests.get(url, headers=HEADERS)
         soup = BeautifulSoup(response.content, "html.parser")
-        price_tag = soup.find("span", {"class": "a-price-whole"})
-        if not price_tag:
-            return None
-        price = price_tag.get_text().replace(",", "").strip()
-        return float(price)
-    except:
-        return None
+        # Extract current price
+        price = None
+        price_whole = soup.find("span", {"class": "a-price-whole"})
+        price_fraction = soup.find("span", {"class": "a-price-fraction"})
+        if price_whole:
+            price_text = price_whole.get_text().replace(",", "").replace("₹", "").strip()
+            if price_fraction:
+                price_text += "." + price_fraction.get_text().strip()
+            try:
+                price = float(price_text)
+            except ValueError:
+                pass
+        # Fallback to other selectors for current price
+        if price is None:
+            selectors = [
+                ("span", {"id": "priceblock_ourprice"}),
+                ("span", {"id": "priceblock_dealprice"}),
+                ("span", {"id": "priceblock_saleprice"}),
+                ("span", {"class": "a-offscreen"}),
+            ]
+            for tag, attrs in selectors:
+                price_tag = soup.find(tag, attrs)
+                if price_tag:
+                    price_text = price_tag.get_text().replace(",", "").replace("₹", "").strip()
+                    try:
+                        price = float(price_text.split()[0])
+                        break
+                    except ValueError:
+                        continue
+        # Extract actual/list price (original price)
+        actual_price = None
+        list_price_selectors = [
+            ("span", {"id": "priceblock_listprice"}),
+            ("span", {"class": "priceBlockStrikePriceString"}),
+            ("span", {"class": "a-text-strike"}),
+        ]
+        for tag, attrs in list_price_selectors:
+            list_price_tag = soup.find(tag, attrs)
+            if list_price_tag:
+                list_price_text = list_price_tag.get_text().replace(",", "").replace("₹", "").strip()
+                try:
+                    actual_price = float(list_price_text.split()[0])
+                    break
+                except ValueError:
+                    continue
+        if price is None and actual_price is None:
+            print("DEBUG: Price not found. HTML snippet:")
+            print(soup.prettify()[:500])
+        return price, actual_price
+    except Exception as e:
+        print(f"Error fetching price: {e}")
+        return None, None
 
 def get_amazon_rating(url):
     try:
         response = requests.get(url, headers=HEADERS)
         soup = BeautifulSoup(response.content, "html.parser")
-        rating_tag = soup.find("span", {"class": "a-icon-alt"})
-        if rating_tag:
-            rating_text = rating_tag.get_text().split()[0]  # e.g., "4.3 out of 5 stars"
-            try:
-                return float(rating_text)
-            except ValueError:
-                return None
+        selectors = [
+            ("span", {"class": "a-icon-alt"}),
+            ("span", {"data-asin": True, "class": "a-size-base a-color-base"}),
+        ]
+        for tag, attrs in selectors:
+            rating_tag = soup.find(tag, attrs)
+            if rating_tag:
+                rating_text = rating_tag.get_text().split()[0]
+                try:
+                    return float(rating_text)
+                except ValueError:
+                    continue
+        print("DEBUG: Rating not found. HTML snippet:")
+        print(soup.prettify()[:500])
         return None
-    except:
+    except Exception as e:
+        print(f"Error fetching rating: {e}")
         return None
 
 def get_amazon_title(url):
     try:
         response = requests.get(url, headers=HEADERS)
         soup = BeautifulSoup(response.content, "html.parser")
-        title_tag = soup.find("span", {"id": "productTitle"})
-        if title_tag:
-            return title_tag.get_text().strip()
+        selectors = [
+            ("span", {"id": "productTitle"}),
+            ("h1", {"id": "title"}),
+            ("span", {"class": "a-size-large product-title-word-break"}),
+        ]
+        for tag, attrs in selectors:
+            title_tag = soup.find(tag, attrs)
+            if title_tag:
+                return title_tag.get_text().strip()
+        print("DEBUG: Title not found. HTML snippet:")
+        print(soup.prettify()[:500])
         return None
-    except:
+    except Exception as e:
+        print(f"Error fetching title: {e}")
         return None
 
 def send_telegram_alert(message):
@@ -107,10 +173,7 @@ def save_alerted_prices(data):
 def main():
     print(f"Script run at {datetime.now()}")
     with open("keywords.txt", "r") as file:
-        keywords = [
-            line.strip() for line in file
-            if line.strip() and re.match(r'^[A-Za-z0-9 ]+$', line.strip())
-        ]
+        keywords = [line.strip() for line in file if line.strip()]
     all_new_links = []
     alerted_prices = load_alerted_prices()
     for keyword in keywords:
@@ -119,23 +182,29 @@ def main():
         all_new_links.extend(product_links)
         for link in product_links:
             print(f"Checking: {link}")
-            price = get_amazon_price(link)
-            rating = get_amazon_rating(link)
+            price, actual_price = get_amazon_price(link)
             title = get_amazon_title(link)
-            if price and rating:
-                if price < 1500 and rating >= 4.0:
+            rating = get_amazon_rating(link)
+            
+            alert_title = title if title else "(Title not found)"
+            price_info = f"Current Price: ₹{price}" if price else "Price not found"
+            actual_price_info = f"Actual Price: ₹{actual_price}" if actual_price else ""
+            rating_info = f"Rating: {rating}" if rating else "Rating not found"
+            print(price_info, actual_price_info)
+            print(rating_info)
+            if price is not None and rating is not None:
+                if price < PRICE_THRESHOLD and rating >= 4.0:
                     last_alerted = alerted_prices.get(link)
                     if last_alerted != price:
-                        alert_title = title if title else "(No Title Found)"
                         send_telegram_alert(
-                            f"💸 Grab fast! Price drop!\n{alert_title}\n{link}\nCurrent Price: ₹{price} 🚀\n⭐ Rating: {rating}"
+                            f"🔥🎉 HOT DEAL ALERT! 🎉🔥\n\n🛒 {alert_title}\n🔗 {link}\n💰 {price_info} ✅\n💰 {actual_price_info} ❌\n⭐️ {rating_info}\n\nHurry, before it's gone! 🚀🤑"
                         )
                         alerted_prices[link] = price
                         save_alerted_prices(alerted_prices)
                     else:
                         print(f"🔁 Already alerted for this price: ₹{price}")
                 else:
-                    print(f"🟡 No drop or rating too low. ₹{price}, ⭐ {rating}")
+                    print(f"🟡 No drop. ₹{price}, Rating: {rating}")
             else:
                 print(f"⚠️ Couldn't fetch price or rating for keyword: {keyword} and link: {link}")
             sleep(2)
