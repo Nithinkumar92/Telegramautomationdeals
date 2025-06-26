@@ -75,7 +75,7 @@ def send_telegram_alert(message):
         print(f"❌ Error sending message: {e}")
 
 
-TELEGRAM_BOT_TOKEN = "7789826926:AAFhwdDpcj_mpBDU11a6UFE6tbRDNXwtF3U"
+TELEGRAM_BOT_TOKEN = "your telegram bot token"
 TELEGRAM_CHAT_ID = "@prideautomation" 
 print("TELEGRAM_BOT_TOKEN:", os.getenv("TELEGRAM_BOT_TOKEN"))
 print("TELEGRAM_CHAT_ID:", TELEGRAM_CHAT_ID)
